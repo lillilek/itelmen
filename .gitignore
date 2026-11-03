@@ -1,0 +1,5 @@
+.private/
+*.xml
+*.flextext
+*.fwdata
+__pycache__/
