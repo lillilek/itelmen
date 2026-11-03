@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ительменский язык · Корпус</title>
+<link rel="stylesheet" href="assets/style.css"><link rel="stylesheet" href="assets/site-ui.css"><script src="assets/site-ui.js"></script>
+<body><header id="site-header"><div class="header-inner"><div id="brand"></div>
+<div class="search-row"><label class="sr-only" for="query">Поиск в корпусе</label><input id="query" type="search" placeholder="Слово, глосса или перевод" spellcheck="false"><button id="clear">Очистить</button></div>
+<div class="filter-row"><span class="filter-title">Искать в:</span><div id="fields" class="field-options" role="group" aria-label="Поля поиска"></div><button class="small" id="all">Все</button><button class="small" id="none">Снять все</button></div>
+<div class="settings-row"><div class="settings"><label><input type="checkbox" id="marks"> Не учитывать диакритику</label><label><input type="checkbox" id="regex"> Регулярное выражение</label><label><input type="checkbox" id="exact"> Целая глосса</label></div><label class="scope"><span class="sr-only">Текст</span><select id="scope"><option value="">Все тексты</option></select></label></div>
+<div class="status-row"><output id="status" aria-live="polite"></output></div></div></header>
+<main><div class="page-intro"><h2>Корпус</h2></div><div class="panel"><details><summary>Отображение и параметры выдачи</summary>
+<label><input id="formsOn" type="checkbox" checked>Морфемы</label>
+<label><input id="glossOn" type="checkbox" checked>Глоссы</label>
+<label><input id="transOn" type="checkbox" checked>Перевод</label><p><label>Вид <select id="mode"><option>Интерлинеар</option><option>KWIC</option></select></label>
+<label>Порядок <select id="sort"><option>Как в тексте</option><option>По заглавию</option><option>Случайный</option></select></label>
+<label>Ключ выборки <input id="seed" value="itelmen" size="9"></label>
+<label><input type="checkbox" id="savedOnly">Только подборка</label>
+<button id="share">Скопировать запрос</button>
+<button id="download">Скачать выдачу TSV</button>
+</p></details>
+<details><summary>Сочетания слов и морфем</summary>
+<p>Условия первого слова выполняются совместно. Диапазон задаёт число слов между совпадениями в одном сегменте. Пунктуация не учитывается.</p>
+<label>Словоформа <input id="aw"></label><label>Лемма <input id="al"></label>
+<label>Часть речи <input id="ap"></label><label>Морфема <input id="af"></label>
+<label>Глоссы по порядку <input id="ag" placeholder="COM * IPFV"></label>
+<small>Разделяйте глоссы пробелом; * пропускает любое число морфем. В остальных полях | задаёт варианты, ! исключает значение.</small>
+<p><label>Второе слово / лемма <input id="second"></label><label>Промежуток от <input id="lo" type="number" min="0" value="0"></label><label>до <input id="hi" type="number" min="0" value="0"></label>
+<select id="order"><option>Следом</option><option>Любой порядок</option></select><select id="role"><option>Обязательно</option><option>Факультативно</option><option>Исключить</option></select></p>
+<label>В переводе также есть <input id="translation"></label>
+</details>
+<details><summary>Как искать</summary>Введите IPFV для поиска глоссы. В режиме регулярных выражений ^ обозначает начало поля, $ — конец, вертикальная черта — альтернативы. Нажмите на слово для разбора.</details>
+</div><section id="list"></section><button id="more">Показать ещё</button></main><footer></footer>
+<script type="application/json" id="data">CORPUS_PAYLOAD</script>
+<script id="worker" type="text/plain">
+function fold(s,o,ru){
+ if(o.rx && !o.marks)return s.normalize('NFC');
+ let t=s.normalize('NFC');
+ if(!o.rx)t=t.toLowerCase();
+ if(o.marks)t=t.replace(/[йЙ]|[^йЙ]+/gu,x=>/^[йЙ]$/u.test(x)?x:x.normalize('NFD').replace(/\p{M}/gu,'')).normalize('NFC');
+ else t=t.normalize('NFD').replace(/[\u0300\u0301]/gu,'').normalize('NFC');
+ return !o.rx&&ru?t.replace(/ё/g,'е'):t;
+}
+onmessage=({data:o})=>{
+ try{
+ const q=o.q, result=[];
+ const pattern=o.rx&&q?new RegExp(q,'giu'):null;
+ for(let i=0;i<o.docs.length;i++){
+  let s=o.docs[i];if(o.t&&o.t!==s.t)continue;
+  let hits={};
+  let a=o.advanced;
+  function matches(value,condition){
+    const parts=condition.split('|').map(v=>fold(v.trim(),o,false));
+    const text=fold(value,o,false);
+    return !condition||(!parts.includes('!'+text)&&(!parts.some(v=>!v.startsWith('!'))||parts.includes(text)));
+  }
+  function sequence(morphs,pattern){
+    if(!pattern.trim())return true;
+    const tokens=pattern.trim().split(/\s+/), gs=morphs.map(m=>m[1].replace(/^[-=]/,''));
+    let positions=new Set(Array.from({length:gs.length+1},(_,j)=>j));
+    for(const token of tokens){
+      if(token==='*'){const min=Math.min(...positions);positions=new Set(gs.map((_,j)=>j+1).filter(j=>j>=min).concat([...positions]));}
+      else positions=new Set([...positions].filter(j=>j<gs.length&&matches(gs[j],token)).map(j=>j+1));
+    }return positions.size>0;
+  }
+  if(a.translation&&!fold(s.r,o,true).includes(fold(a.translation,o,true)))continue;
+  const active=Boolean(a.aw||a.al||a.ap||a.af||a.ag||a.second);
+  let accepted=[];
+  if(active){
+    let words=s.w.map((w,j)=>({w,j})).filter(({w})=>w[2].length);
+    for(let x=0;x<words.length;x++){let {w,j}=words[x];
+      if(!matches(w[0],a.aw)||!matches(w[1],a.ap)||!sequence(w[2],a.ag))continue;
+      if(a.al&&!w[2].some(m=>matches(m[2],a.al)))continue;
+      if(a.af&&!w[2].some(m=>matches(m[0],a.af)))continue;
+      let others=a.second?words.filter(({w:v},y)=>{let gap=Math.abs(y-x)-1;return (y>x||a.free)&&gap>=a.lo&&gap<=a.hi&&(matches(v[0],a.second)||v[2].some(m=>matches(m[2],a.second)))}):[];
+      if(a.second&&(a.role===0&&!others.length||a.role===2&&others.length))continue;
+      accepted.push(j,...others.map(o=>o.j));
+    }
+    if(!accepted.length)continue;
+  }
+  function check(key,field,raw,ru=false){
+   if(!o.fields.includes(field)||!q)return;
+   let str='',map=[];for(const x of raw.normalize('NFC').matchAll(/\P{M}\p{M}*|\p{M}/gu)){const f=fold(x[0],o,ru);str+=f;for(let j=0;j<f.length;j++)map.push([x.index,x.index+x[0].length])}
+   const needle=fold(q,o,ru);let spans=[];
+   if(pattern){for(const m of str.matchAll(pattern)){if(m[0])spans.push([m.index,m.index+m[0].length]);else hits[key]=[]}}
+   else if(needle){let at=0;while((at=str.indexOf(needle,at))!==-1){spans.push([at,at+needle.length]);at+=needle.length}}
+   for(let [a,b] of spans){if(o.exact&&field==='g'&&(a>(/^[-=]/.test(str)?1:0)||b!==str.length))continue;(hits[key]??=[]).push([map[a][0],map[b-1][1]])}
+  }
+  check('r','r',s.r,true);check('s','s',s.w.map(w=>w[0]).join(' '));
+  s.w.forEach(([wf,pos,m],j)=>{check('w'+j,'w',wf);check('p'+j,'p',pos);
+   m.forEach(([form,gloss,lemma],k)=>{check('f'+j+'.'+k,'f',form);check('g'+j+'.'+k,'g',gloss);check('l'+j+'.'+k,'l',lemma)})});
+  if(o.entry&&!s.w.some(w=>w[2].some(m=>m[3]===o.entry)))continue;
+  if(o.fields.length&&(!q||Object.keys(hits).length)){
+    for(const j of accepted)hits['w'+j]=[[0,s.w[j][0].length]];
+    if(o.entry)s.w.forEach((w,j)=>{if(w[2].some(m=>m[3]===o.entry))hits['w'+j]=[[0,w[0].length]]});
+    result.push([i,hits]);
+  }
+ }
+ postMessage({result})
+ }catch(e){postMessage({error:e.message})}
+}
+</script><script>
+const el=id=>document.getElementById(id), docs=JSON.parse(el('data').textContent);
+const params=new URLSearchParams(location.search);
+const layout=document.createElement('style');document.head.append(layout);
+function setLayers(){layout.textContent=(el('formsOn').checked?'':'.m>span{display:none}')+(el('glossOn').checked?'':'.m>small{display:none}')+(el('transOn').checked?'':'article>p{display:none}')}
+el('brand').outerHTML=SiteUI.brand('corpus');SiteUI.footer('corpus');SiteUI.observe();
+SiteUI.keyboard(el('query'),['aw','al','af','ag','second','translation'].map(el));
+const saved=new Set(JSON.parse(localStorage.getItem('itl-examples')||'[]'));
+function sortKey(id){let h=2166136261;for(const c of el('seed').value+id)h=Math.imul(h^c.charCodeAt(0),16777619);return h>>>0}
+if(params.has('embed'))document.body.classList.add('embed');
+if(location.hash==='#glossary')location.replace('glossary.html');
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const mark=(text,spans=[])=>{let s=text.normalize('NFC'),i=0,out='';for(const [a,b] of spans){out+=esc(s.slice(i,a))+'<mark>'+esc(s.slice(a,b))+'</mark>';i=b}return out+esc(s.slice(i))};
+const labels={w:'Словоформа',l:'Лемма',f:'Морфема',g:'Глосса',p:'Часть речи',r:'Перевод',s:'Строка'};
+el('fields').insertAdjacentHTML('beforeend',Object.entries(labels).map(([k,v])=>'<label><input type="checkbox" checked value="'+k+'">'+v+'</label>').join(''));
+for(const t of new Set(docs.map(s=>s.t)))el('scope').add(new Option(t,t));
+const blob=URL.createObjectURL(new Blob([el('worker').textContent],{type:'text/javascript'}));
+let worker,timer,generation=0,found=[],shown=0;
+function article(i,hits){
+ const s=docs[i];let offset=0;
+ if(el('mode').selectedIndex===1){
+   const positions=s.w.map((_,j)=>j).filter(j=>Object.keys(hits).some(k=>new RegExp('^[wplgf]'+j+'(?:\\.|$)').test(k)));
+   if(positions.length)return '<article id="'+esc(s.id)+'"><a href="#'+esc(s.id)+'">§ '+esc(s.n)+'</a>'+positions.map(j=>'<p>'+esc(s.w.slice(Math.max(0,j-6),j).map(w=>w[0]).join(' '))+' <mark>'+esc(s.w[j][0])+'</mark> '+esc(s.w.slice(j+1,j+7).map(w=>w[0]).join(' '))+'</p>').join('')+'<p>'+esc(s.r)+'</p></article>';
+ }
+ const words=s.w.map(([wf,pos,m],j)=>{
+ const ranges=(hits['w'+j]||[]).slice();
+ for(const [a,b] of hits.s||[]){const x=Math.max(0,a-offset),y=Math.min(wf.length,b-offset);if(y>x&&!ranges.length)ranges.push([x,y])}offset+=wf.length+1;
+ const analysis=m.map(([f,g,l,id],k)=>{let key=j+'.'+k;let v=mark(l,hits['l'+key]);return id?'<a href="index.html#'+esc(id)+'">'+v+'</a>':v}).filter(Boolean).join(' · ');
+ const parts=m.map(([f,g],k)=>'<span class="m"><span>'+mark(f,hits['f'+j+'.'+k])+'</span><small>'+mark(g,hits['g'+j+'.'+k])+'</small></span>').join('');
+ const show=hits['p'+j]||m.some((_,k)=>hits['l'+j+'.'+k]);
+ return '<span class="word"><details '+(show?'open':'')+'><summary><b>'+mark(wf,ranges)+'</b></summary><span class="details">'+analysis+' '+mark(pos,hits['p'+j])+'</span></details><span class="parts">'+parts+'</span></span>'
+ }).join('');
+ return '<article id="'+esc(s.id)+'"><a href="#'+esc(s.id)+'">§ '+esc(s.n)+'</a><div class="line">'+words+'</div><p>'+mark(s.r,hits.r)+'</p><div class="actions"><button data-copy="'+i+'">Скопировать пример</button><button data-context="'+i+'">Контекст</button><button data-save="'+i+'">'+(saved.has(s.id)?'Убрать из подборки':'В подборку')+'</button></div></article>'
+}
+function append(){let last=shown?docs[found[shown-1][0]]:null;for(const [i,h] of found.slice(shown,shown+30)){let s=docs[i];if(!last||s.t!==last.t)el('list').insertAdjacentHTML('beforeend','<h2 class="results-title">'+esc(s.t)+'</h2>');el('list').insertAdjacentHTML('beforeend',article(i,h));last=s;shown++}el('more').hidden=shown>=found.length}
+function run(){
+ setLayers();
+ const gen=++generation;worker?.terminate();clearTimeout(timer);el('more').hidden=true;el('status').textContent='Поиск…';
+ worker=new Worker(blob);
+ worker.onmessage=({data})=>{if(gen!==generation)return;clearTimeout(timer);worker.terminate();found=data.result||[];
+ if(el('savedOnly').checked)found=found.filter(([i])=>saved.has(docs[i].id));
+ if(el('sort').selectedIndex===1)found.sort(([i],[j])=>docs[i].t.localeCompare(docs[j].t,'ru'));
+ if(el('sort').selectedIndex===2)found.sort(([i],[j])=>sortKey(docs[i].id)-sortKey(docs[j].id));
+ shown=0;el('list').replaceChildren();el('status').textContent=data.error?'Ошибка запроса: '+data.error:'Найдено сегментов: '+found.length;append();
+ const id=location.hash.slice(1);if(id&&docs.some(s=>s.id===id)&&!el('query').value){while(!el(id)&&shown<found.length)append();el(id)?.scrollIntoView()}};
+ timer=setTimeout(()=>{worker.terminate();el('list').replaceChildren();el('status').textContent='Поиск остановлен. Упростите выражение.'},4000);
+ const advanced=Object.fromEntries(['aw','al','ap','af','ag','second','translation'].map(id=>[id,el(id).value.trim()]));
+ Object.assign(advanced,{free:!!el('order').selectedIndex,role:el('role').selectedIndex,lo:+el('lo').value,hi:+el('hi').value});
+ worker.postMessage({docs,advanced,entry:params.get('entry'),q:el('query').value.trim(),fields:[...document.querySelectorAll('#fields input:checked')].map(x=>x.value),rx:el('regex').checked,marks:el('marks').checked,exact:el('exact').checked,t:el('scope').value})
+}
+el('list').onclick=async e=>{let b=e.target.closest('button');if(!b)return;
+ if(b.dataset.save!==undefined){let id=docs[Number(b.dataset.save)].id;if(saved.has(id))saved.delete(id);else saved.add(id);localStorage.setItem('itl-examples',JSON.stringify([...saved]));if(el('savedOnly').checked)run();else b.textContent=saved.has(id)?'Убрать из подборки':'В подборку';return}
+ let i=Number(b.dataset.copy??b.dataset.context),s=docs[i];
+ if(b.dataset.copy!==undefined){const parts=(k)=>s.w.map(w=>w[2].map(m=>m[k]).join('')).join(' ');await navigator.clipboard.writeText([s.w.map(w=>w[0]).join(' '),parts(0),parts(1),s.r,location.href.split('#')[0]+'#'+s.id].join('\n'));b.textContent='Скопировано'}
+ else if(params.has('entry')){window.open('corpus.html#'+s.id,'_blank','noopener')}
+ else {el('query').value='';el('scope').value=s.t;location.hash=s.id;run()}
+};
+el('more').onclick=append;el('clear').onclick=()=>{for(const id of ['query','aw','al','ap','af','ag','second','translation'])el(id).value='';run()};
+el('download').onclick=()=>{const tsv=[['Текст','Сегмент','Слова','Перевод'],...found.map(([i])=>{let s=docs[i];return [s.t,s.n,s.w.map(w=>w[0]).join(' '),s.r]})].map(row=>row.map(v=>v.replace(/[\t\r\n]/g,' ')).join('\t')).join('\n');let link=document.createElement('a');link.href=URL.createObjectURL(new Blob([tsv],{type:'text/tab-separated-values;charset=utf-8'}));link.download='itelmen.tsv';link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000)};
+for(let id of ['all','none'])el(id).onclick=()=>{document.querySelectorAll('#fields input').forEach(x=>x.checked=id==='all');run()};
+const controls=[...document.querySelectorAll('.panel input[id],.panel select,#site-header input[id],#site-header select')];
+for(const c of controls)if(params.has(c.id)){if(c.type==='checkbox')c.checked=params.get(c.id)==='1';else c.value=params.get(c.id)}
+if(params.has('fields'))for(const c of document.querySelectorAll('#fields input'))c.checked=params.get('fields').split(',').includes(c.value);
+el('share').onclick=async()=>{let u=new URL(location.href);for(const c of controls)u.searchParams.set(c.id,c.type==='checkbox'?Number(c.checked):c.value);u.searchParams.set('fields',[...document.querySelectorAll('#fields input:checked')].map(c=>c.value).join(','));await navigator.clipboard.writeText(u.href);el('share').textContent='Ссылка скопирована'};
+document.querySelector('.panel').oninput=run;el('site-header').oninput=run;window.onhashchange=run;run();
+</script></html>

@@ -119,4 +119,3 @@ if __name__=='__main__':
     for key in ('xml','dictionary','output'): parser.add_argument(key,type=Path)
     args=parser.parse_args()
     args.output.write_text(render(args.xml,args.dictionary),encoding='utf-8')
-
